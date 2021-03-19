@@ -1,9 +1,16 @@
-name: Publish Releases to Hub
+name: ci
 
 on:
+  # schedule:
+  #   - cron: '0 10 * * *' # everyday at 10am
   push:
+    branches:
+      - "**"
     tags:
       - "v*.*.*"
+  pull_request:
+    branches:
+      - "master"
 
 jobs:
   docker:
@@ -11,57 +18,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-
-      - name: Prepare
-        id: prep
-        run: |
-          DOCKER_IMAGE=earias/dev-tools-backend
-          VERSION=edge
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          fi
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            VERSION=nightly
-          fi
-          TAGS="${DOCKER_IMAGE}:${VERSION}"
-          if [[ $VERSION =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-            TAGS="$TAGS,${DOCKER_IMAGE}:latest"
-          fi
-          echo ::set-output name=tags::${TAGS}
+      - name: Docker meta
+        id: docker_meta
+        uses: crazy-max/ghaction-docker-meta@v1
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            earias/dev-tools-backend
+            ghcr.io/evert-arias/dev-tools-backend
+          # add git short SHA as Docker tag
+          tag-sha: true
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
-        with:
-          platforms: all
-
       - name: Set up Docker Buildx
-        id: buildx
         uses: docker/setup-buildx-action@v1
-
-      - name: Cache Docker layers
-        uses: actions/cache@v2
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
       - name: Login to DockerHub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v1
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
       - name: Build and push
-        id: docker_build
         uses: docker/build-push-action@v2
         with:
-          builder: ${{ steps.buildx.outputs.name }}
           context: .
-          platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.prep.outputs.tags }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache
-
-      - name: Image digest
-        run: echo ${{ steps.docker_build.outputs.digest }}
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
